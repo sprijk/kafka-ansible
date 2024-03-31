@@ -1,0 +1,182 @@
+#Installing Apache Kafka (Zookeeper&Brokers)
+- name: Install and Configure Zookeeper & Brokers
+  hosts: zookeepers, brokers
+  become: yes
+  vars:
+    jdk_version: java-1.8.0-openjdk
+    installation_dir: /etc/kafka
+    zookeeper_data_dir: /var/lib/zookeeper/data
+    zookeeper_port: 2181
+    kafka_heap_size: -Xmx520M -Xms520M
+    zookeeper_heap_size: -Xmx528M -Xms528M
+    kafka_version: 3.5.1
+    scala_version: 2.12
+    kafka_url: https://downloads.apache.org/kafka/{{kafka_version}}/kafka_{{scala_version}}-{{kafka_version}}.tgz
+  tasks:
+    - name: Install JDK (OpenJDK)
+      yum:
+        name: "{{jdk_version}}"
+        state: present
+        update_cache: yes
+
+    - name: Create a group called "kafka"
+      group:
+        name: kafka
+        state: present
+
+    - name: Create a user called "kafka"
+      user:
+        name: kafka
+        state: present
+        group: kafka
+
+    - name: Create an installation directory
+      file:
+        path: "{{installation_dir}}"
+        state: directory
+        mode: 0755
+        owner: kafka
+        group: kafka
+
+    - name: Download & Unzip Kafka from site
+      unarchive:
+        src: "{{kafka_url}}"
+        dest: "{{installation_dir}}"
+        mode: 0755
+        remote_src: yes
+
+    - name: Move all the files to parent directory
+      shell: mv {{installation_dir}}/kafka_*/* {{installation_dir}}/.
+
+    - name: Remove Kafka tgz zip file (delete file)
+      file:
+        path: "{{installation_dir}}/kafka_{{scala_version}}-{{kafka_version}}"
+        state: absent
+
+    #Configuring Zookeeper Ensemble
+    - name: Configure ZooKeeper Properties
+      template:
+        src: zb_zookeeper_properties.j2
+        dest: "{{installation_dir}}/config/zookeeper.properties"
+      when: inventory_hostname in groups['zookeepers']
+
+    - name: Create ZooKeeper data directory
+      file:
+        path: "{{ zookeeper_data_dir }}"
+        state: directory
+        mode: 0755
+        recurse: yes
+        owner: kafka
+        group: kafka
+      when: inventory_hostname in groups['zookeepers']
+
+    - name: Create ZooKeeper myid file with unique incremental values
+      copy:
+        content: "{{ hostvars[inventory_hostname]['myid'] }}"
+        dest: "{{zookeeper_data_dir}}/myid"
+      when: inventory_hostname in groups['zookeepers']
+
+    - name: Update the Java Heap Size for Zookeepers
+      replace:
+        path: "{{installation_dir}}/bin/zookeeper-server-start.sh"
+        regexp: 'export KAFKA_HEAP_OPTS=(".+")'
+        replace: 'export KAFKA_HEAP_OPTS="{{zookeeper_heap_size}}"'
+        backup: yes
+      when: inventory_hostname in groups['zookeepers']
+
+    #Configuring Kafka Brokers
+    - name: Configure Server Properties
+      template:
+        src: zb_server_properties.j2
+        dest: "{{installation_dir}}/config/server.properties"
+      when: inventory_hostname in groups['brokers']
+
+    - name: Update the Java Heap Size for Kafka
+      replace:
+        path: "{{installation_dir}}/bin/kafka-server-start.sh"
+        regexp: 'export KAFKA_HEAP_OPTS=(".+")'
+        replace: 'export KAFKA_HEAP_OPTS="{{kafka_heap_size}}"'
+        backup: yes
+      when: inventory_hostname in groups['brokers']
+
+    #Create a Service for Zookeeper
+    - name: Create a Service file for ZooKeeper with Copy module
+      copy:
+        dest: /etc/systemd/system/zookeeper.service
+        content: |
+          [Unit]
+          Requires=network.target remote-fs.target
+          After=network.target remote-fs.target
+          [Service]
+          Type=simple
+          User=kafka
+          ExecStart=/bin/sh -c '{{installation_dir}}/bin/zookeeper-server-start.sh {{installation_dir}}/config/zookeeper.properties > {{zookeeper_data_dir}}/zookeeperservice.log 2>&1'
+          ExecStop={{installation_dir}}/bin/zookeeper-server-stop.sh
+          Restart=always
+          [Install]
+          WantedBy=multi-user.target
+        mode: 0755
+      when: inventory_hostname in groups['zookeepers']
+
+    #Create a Service for Kafka
+    - name: Create a Service file for Kafka with Copy module
+      copy:
+        dest: /etc/systemd/system/kafka.service
+        content: |
+          [Unit]
+          Requires=zookeeper.service
+          After=zookeeper.service
+          [Service]
+          Type=simple
+          User=kafka
+          ExecStart=/bin/sh -c '{{installation_dir}}/bin/kafka-server-start.sh {{installation_dir}}/config/server.properties > {{installation_dir}}/kafkaservice.log 2>&1'
+          ExecStop={{installation_dir}}/bin/kafka-server-stop.sh
+          Restart=always
+          [Install]
+          WantedBy=multi-user.target
+        mode: 0755
+      when: inventory_hostname in groups['brokers']
+
+    #Daemon reload after creating services
+    - name: Systemctl daemon-reload after creation
+      shell: systemctl daemon-reload
+
+    #Start & Check Service for Zookeepers
+    - name: Start Zookeepers
+      tags: startzookeepers
+      systemd:
+        name: "zookeeper"
+        state: started
+        daemon_reload: true
+        enabled: yes
+      when: inventory_hostname in groups['zookeepers']
+
+    - name: Validating if zookeeper is up and listening on port 2181
+      wait_for:
+        host: "{{ ansible_host }}"
+        port: 2181
+        delay: 10
+        timeout: 30
+        state: started
+        msg: "Zookeeper not seem to be running on {{ansible_host}}"
+      when: inventory_hostname in groups['zookeepers']
+
+    #Start & Check Service for Kafka Brokers
+    - name: Start Kafka Brokers
+      tags: startkafkabrokers
+      systemd:
+        name: "kafka"
+        state: started
+        daemon_reload: true
+        enabled: yes
+      when: inventory_hostname in groups['brokers']
+
+    - name: Validating if Kafka is up and listening on port 9092
+      wait_for:
+        host: "{{ ansible_host }}"
+        port: 9092
+        delay: 10
+        timeout: 30
+        state: started
+        msg: "Kafka brokers do not seem to be running on {{ ansible_host }}"
+      when: inventory_hostname in groups['brokers']

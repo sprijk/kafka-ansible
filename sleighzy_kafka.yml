@@ -1,0 +1,10 @@
+- hosts: kafka-nodes
+  become: yes
+  roles:
+    - role: sleighzy.kafka
+      vars:
+        kafka_version: 3.5.2
+        kafka_log_retention_hours: 48
+        kafka_log_segment_bytes: 1073741824
+        kafka_auto_create_topics_enable: true
+        kafka_default_replication_factor: 10

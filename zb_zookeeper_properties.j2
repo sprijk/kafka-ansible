@@ -1,0 +1,10 @@
+#zookeeper.properties file template
+dataDir={{zookeeper_data_dir}}
+dataLogDir={{zookeeper_data_dir}}/log
+clientPort={{zookeeper_port}}
+initLimit=10
+syncLimit=5
+tickTime=2000
+server.1={{ hostvars['kafka-1.internal']['ansible_host'] }}:2888:3888
+server.2={{ hostvars['kafka-2.internal']['ansible_host'] }}:2888:3888
+server.3={{ hostvars['kafka-3.internal']['ansible_host'] }}:2888:3888
